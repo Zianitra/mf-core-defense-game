@@ -365,5 +365,5 @@ export function createRenderer(canvas) {
 
   resize();
   window.addEventListener('resize', resize);
-  return { draw };
+  return { draw, view };
 }

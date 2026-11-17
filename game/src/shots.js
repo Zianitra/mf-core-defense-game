@@ -1,62 +1,64 @@
 // The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
+// fresh world for a fixed number of steps, steered by a simple autopilot (an aim policy that
+// sweeps the halo toward the nearest, most valuable gloom it can reach in time), so the frame is
+// what a short game really looks like and the same seed always gives the same frame.
+import { BEAM, CORE, STEP } from './config.js';
+import { angleDiff } from './random.js';
+import { EVENT_OVER, KIND_GILDED, KIND_HUSK } from './world.js';
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
 const START_SECONDS = 5;
 const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
+const END_LIMIT_SECONDS = 900;
 /**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
+ * How far ahead, in seconds, the autopilot gives a wisp to reach the core: the play scene's pilot
+ * looks well ahead and keeps all its embers; the end scene's looks only a moment ahead, so it is
+ * caught out once the gloom speeds up, as a hurried player is.
  */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+const HORIZON_PLAY = 2.6;
+const HORIZON_END = 0.9;
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
-    }
-  }
-  return Infinity;
-}
+const WISDOM = { [KIND_GILDED]: 3, [KIND_HUSK]: 2 };
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
+/**
+ * The autopilot's aim: weigh every wisp by its value and its urgency (how soon it reaches the
+ * core) and pick the best one the beam can reach in time; otherwise hold the beam on the most
+ * urgent wisp anywhere.
+ */
 function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
+  const wisps = state.wisps;
+  let best = null;
+  let bestScore = -Infinity;
+  for (let index = 0; index < wisps.length; index += 1) {
+    const wisp = wisps[index];
+    if (!wisp.active) continue;
+    const dx = wisp.x - CORE.x;
+    const dy = wisp.y - CORE.y;
+    const angle = Math.atan2(dy, dx);
+    const turn = Math.abs(angleDiff(angle, state.beamAngle)) / BEAM.turnSpeed;
+    const approach = (Math.hypot(dx, dy) - CORE.radius - wisp.radius) / Math.max(wisp.speed, 1);
+    if (turn > approach) continue; // it cannot be reached before it lands
+    const urgency = Math.max(0, horizon - approach);
+    const value = wisp.kind === KIND_GILDED ? WISDOM[KIND_GILDED] : wisp.kind === KIND_HUSK ? WISDOM[KIND_HUSK] : 1;
+    const score = urgency * 3 + value;
+    if (score > bestScore) {
+      bestScore = score;
+      best = angle;
     }
   }
-  return best;
+  if (best !== null) return best;
+  let nearest = null;
+  let nearestDist = Infinity;
+  for (let index = 0; index < wisps.length; index += 1) {
+    const wisp = wisps[index];
+    if (!wisp.active) continue;
+    const dist = Math.hypot(wisp.x - CORE.x, wisp.y - CORE.y);
+    if (dist < nearestDist) {
+      nearestDist = dist;
+      nearest = Math.atan2(wisp.y - CORE.y, wisp.x - CORE.x);
+    }
+  }
+  return nearest ?? state.beamAngle;
 }
 
 /**
@@ -66,14 +68,14 @@ function autopilot(state, horizon) {
 export function stageShot(name, world) {
   world.reset();
   if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
+    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, null, true);
     return { screen: SCREEN_TITLE, best: 0 };
   }
   const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
   const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
   for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
+    if (world.step(STEP, 0, autopilot(world.state, horizon), false) & EVENT_OVER) break;
   }
-  const over = world.state.lives === 0;
+  const over = world.state.health === 0;
   return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
 }

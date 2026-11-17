@@ -63,6 +63,11 @@ export function createWorld(random) {
     }
   }
 
+  function freeWisp() {
+    for (let index = 0; index < wisps.length; index += 1) if (!wisps[index].active) return wisps[index];
+    return null;
+  }
+
   function pickKind(level) {
     const roll = random();
     if (level >= 4 && roll < 0.12 + level * 0.01) return KIND_HUSK;

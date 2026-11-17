@@ -9,6 +9,7 @@ import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 
 const START_SECONDS = 5;
 const PLAY_SECONDS = 26;
+const LATE_SECONDS = 70;
 const END_LIMIT_SECONDS = 900;
 /**
  * How far ahead, in seconds, the autopilot gives a wisp to reach the core: the play scene's pilot
@@ -67,15 +68,16 @@ function autopilot(state, horizon) {
  */
 export function stageShot(name, world) {
   world.reset();
-  if (name !== 'play' && name !== 'end') {
+  if (name !== 'play' && name !== 'end' && name !== 'late') {
     for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, null, true);
     return { screen: SCREEN_TITLE, best: 0 };
   }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
+  const limit = name === 'end' ? END_LIMIT_SECONDS : name === 'late' ? LATE_SECONDS : PLAY_SECONDS;
   const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
   for (let index = 0; index < limit / STEP; index += 1) {
     if (world.step(STEP, 0, autopilot(world.state, horizon), false) & EVENT_OVER) break;
   }
   const over = world.state.health === 0;
+  if (over) { world.state.flash = 0; world.state.shake = 0; }
   return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
 }
